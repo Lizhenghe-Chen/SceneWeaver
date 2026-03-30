@@ -2,13 +2,8 @@ import math
 from typing import Dict, List, Optional, Union
 
 import tiktoken
-from openai import (
-    APIError,
-    AuthenticationError,
-    AzureOpenAI,
-    OpenAIError,
-    RateLimitError,
-)
+import openai
+from openai.error import OpenAIError, APIError, AuthenticationError, RateLimitError
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -220,15 +215,16 @@ class LLM:
             REGION = "eastus2"
             API_BASE = "https://api.tonggpt.mybigai.ac.cn/proxy"
             self.ENDPOINT = f"{API_BASE}/{REGION}"
-            self.MODEL = self.model  # "gpt-4o-2024-08-06"
-            # with open("key.txt","r") as f:
-            #     lines = f.readlines()
-            # self.API_KEY = lines[0].strip()
-            self.client = AzureOpenAI(
-                api_key=self.api_key,
-                api_version=self.api_version,
-                azure_endpoint=self.ENDPOINT,
-            )
+            self.MODEL = self.model
+            # Initialize standard OpenAI client adapter
+            # Set global openai config so existing openai calls work
+            openai.api_key = self.api_key
+            # Prefer configured base_url, otherwise fall back to ENDPOINT
+            if getattr(self, "base_url", None):
+                openai.api_base = self.base_url
+            elif getattr(self, "ENDPOINT", None):
+                openai.api_base = self.ENDPOINT
+            self.client = openai
 
             self.token_counter = TokenCounter(self.tokenizer)
 
@@ -423,42 +419,39 @@ class LLM:
                 )
 
             if not stream:
-                # Non-streaming request
-                response = self.client.chat.completions.create(**params, stream=False)
+                # Non-streaming request using standard OpenAI SDK
+                response = self.client.ChatCompletion.create(**params)
 
-                if not response.choices or not response.choices[0].message.content:
-                    raise ValueError("Empty or invalid response from LLM")
+                # response is a dict-like; extract content and usage
+                content = response["choices"][0]["message"]["content"]
+                usage = response.get("usage", {})
+                self.update_token_count(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
 
-                # Update token counts
-                self.update_token_count(
-                    response.usage.prompt_tokens, response.usage.completion_tokens
-                )
-
-                return response.choices[0].message.content
+                return content
 
             # Streaming request, For streaming, update estimated token count before making the request
             self.update_token_count(input_tokens)
 
-            response = self.client.chat.completions.create(**params, stream=True)
+            response = self.client.ChatCompletion.create(**params, stream=True)
 
             collected_messages = []
             completion_text = ""
             for chunk in response:
-                chunk_message = chunk.choices[0].delta.content or ""
+                # chunk is a dict-like for streamed deltas
+                chunk_message = (
+                    chunk.get("choices", [])[0].get("delta", {}).get("content", "")
+                )
                 collected_messages.append(chunk_message)
                 completion_text += chunk_message
                 print(chunk_message, end="", flush=True)
 
-            print()  # Newline after streaming
+            print()
             full_response = "".join(collected_messages).strip()
             if not full_response:
                 raise ValueError("Empty response from streaming LLM")
 
-            # estimate completion tokens for streaming response
             completion_tokens = self.count_tokens(completion_text)
-            logger.info(
-                f"Estimated completion tokens for streaming response: {completion_tokens}"
-            )
+            logger.info(f"Estimated completion tokens for streaming response: {completion_tokens}")
             self.total_completion_tokens += completion_tokens
 
             return full_response
@@ -594,25 +587,24 @@ class LLM:
 
             # Handle non-streaming request
             if not stream:
-                response = self.client.chat.completions.create(**params)
+                response = self.client.ChatCompletion.create(**params)
 
-                if not response.choices or not response.choices[0].message.content:
-                    raise ValueError("Empty or invalid response from LLM")
-
-                self.update_token_count(response.usage.prompt_tokens)
-                return response.choices[0].message.content
+                content = response["choices"][0]["message"]["content"]
+                usage = response.get("usage", {})
+                self.update_token_count(usage.get("prompt_tokens", 0))
+                return content
 
             # Handle streaming request
             self.update_token_count(input_tokens)
-            response = self.client.chat.completions.create(**params)
+            response = self.client.ChatCompletion.create(**params)
 
             collected_messages = []
             for chunk in response:
-                chunk_message = chunk.choices[0].delta.content or ""
+                chunk_message = chunk.get("choices", [])[0].get("delta", {}).get("content", "")
                 collected_messages.append(chunk_message)
                 print(chunk_message, end="", flush=True)
 
-            print()  # Newline after streaming
+            print()
             full_response = "".join(collected_messages).strip()
 
             if not full_response:
@@ -735,20 +727,17 @@ class LLM:
             # response: ChatCompletion = self.client.chat.completions.create(
             #     **params, stream=False
             # )
-            response = self.client.chat.completions.create(**params, stream=False)
+            response = self.client.ChatCompletion.create(**params)
 
             # Check if response is valid
-            if not response.choices or not response.choices[0].message:
+            if not response.get("choices") or not response["choices"][0].get("message"):
                 print(response)
-                # raise ValueError("Invalid or empty response from LLM")
                 return None
 
-            # Update token counts
-            self.update_token_count(
-                response.usage.prompt_tokens, response.usage.completion_tokens
-            )
+            usage = response.get("usage", {})
+            self.update_token_count(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
 
-            return response.choices[0].message
+            return response["choices"][0]["message"]
 
         except TokenLimitExceeded:
             # Re-raise token limit errors without logging

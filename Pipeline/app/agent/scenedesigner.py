@@ -547,7 +547,7 @@ class SceneDesigner:
                 f"{save_dir}/pipeline/memory_{self.current_step}.pkl", "wb"
             ) as file:
                 dill.dump(self.memory, file)
-            roomtype = os.getenv("roomtype")
+            roomtype = os.getenv("roomtype","bedroom")
             with open(f"{save_dir}/pipeline/roomtype.txt", "w") as f:
                 f.write(roomtype)
 

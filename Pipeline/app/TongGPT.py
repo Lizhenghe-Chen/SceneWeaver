@@ -1,6 +1,4 @@
-from openai import AzureOpenAI
-
-# from utils import local_image_to_data_url, resize, extract_json
+import openai
 
 
 class TongGPT:
@@ -13,26 +11,27 @@ class TongGPT:
         with open("key.txt","r") as f:
             lines = f.readlines()
         self.API_KEY = lines[0].strip()
-        self.api_version = "2025-03-01-preview" #"2024-02-01"
+        self.api_version = "2025-03-01-preview"
         self.init_client()
 
     def init_client(self):
-        self.client = AzureOpenAI(
-            api_key=self.API_KEY,
-            api_version=self.api_version,
-            azure_endpoint=self.ENDPOINT,
-        )
+        openai.api_key = self.API_KEY
+        openai.api_base = self.ENDPOINT
+        self.client = openai
         return self.client
 
     def send_request(self, kw):
-        response = self.client.chat.completions.create(
+        response = self.client.ChatCompletion.create(
             model=self.MODEL,
             messages=[{"role": "user", "content": kw}],
         )
 
-        print(response.model_dump_json(indent=2))
-        print(".....")
-        print(response.choices[0].message.content)
+        try:
+            print(response)
+            print(".....")
+            print(response["choices"][0]["message"]["content"])
+        except Exception:
+            print("Response format unexpected")
         return response
 
 
@@ -41,11 +40,11 @@ class GPT4o(TongGPT):
         super().__init__(MODEL, REGION)
 
     def send_request(self, payload):
-        response = self.client.chat.completions.create(
+        response = self.client.ChatCompletion.create(
             model=payload["model"],
             messages=payload["messages"],
-            temperature=payload["temperature"],
-            max_tokens=payload["max_tokens"],
+            temperature=payload.get("temperature"),
+            max_tokens=payload.get("max_tokens"),
         )
         return response
 
